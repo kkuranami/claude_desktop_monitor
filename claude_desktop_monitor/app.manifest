@@ -2,7 +2,6 @@
   "schemaVersion": "2.0.0",
   "info": {
     "title": "Claude Desktop Monitor",
-    "description": "This app monitors Claude Desktop by collecting local application logs, MCP server logs, session transcripts, and Cowork virtual machine logs. It applies field extractions at index time and includes dashboards for operational analysis.",
     "id": {
       "group": null,
       "name": "claude_desktop_monitor",
@@ -16,13 +15,11 @@
       }
     ],
     "releaseDate": null,
+    "description": "This app monitors Claude Desktop by collecting local application logs, MCP server logs, session transcripts, and Cowork virtual machine logs. It applies field extractions at index time and includes dashboards for operational analysis.",
     "classification": {
-      "categories": [
-        "IT Operations",
-        "Utilities"
-      ],
-      "developmentStatus": "Development",
-      "intendedAudience": "IT"
+      "intendedAudience": null,
+      "categories": [],
+      "developmentStatus": null
     },
     "commonInformationModels": null,
     "license": {
@@ -37,7 +34,7 @@
     },
     "releaseNotes": {
       "name": null,
-      "text": null,
+      "text": "./README.md",
       "uri": null
     }
   },
@@ -50,9 +47,5 @@
     "_standalone",
     "_distributed"
   ],
-  "targetWorkloads": [
-    "_search_heads",
-    "_indexers",
-    "_forwarders"
-  ]
+  "targetWorkloads": null
 }
