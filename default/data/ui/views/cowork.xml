@@ -1,0 +1,124 @@
+<form theme="dark" version="1.1">
+  <label>Cowork</label>
+  <description>This dashboard follows the Cowork sandbox VM through its lifecycle using the coworkd/VM logs.</description>
+
+  <fieldset submitButton="false" autoRun="true">
+    <input type="time" token="time_tok">
+      <label>Time range</label>
+      <default>
+        <earliest>-30d@d</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="dropdown" token="host_tok" searchWhenChanged="true">
+      <label>Host</label>
+      <choice value="*">All hosts</choice>
+      <fieldForLabel>host</fieldForLabel>
+      <fieldForValue>host</fieldForValue>
+      <search>
+        <query>| metadata type=hosts index=claude | sort host | fields host</query>
+        <earliest>-30d@d</earliest>
+        <latest>now</latest>
+      </search>
+      <default>*</default>
+    </input>
+  </fieldset>
+
+  <search id="cowork_base">
+    <query>`claude_index` host=$host_tok$ `claude_sourcetype_cowork`
+| eval level=lower(log_level)
+| rex field=source "(?&lt;log_file&gt;[^/\\\\]+)$"</query>
+    <earliest>$time_tok.earliest$</earliest>
+    <latest>$time_tok.latest$</latest>
+  </search>
+
+  <row>
+    <panel>
+      <title>VM starts</title>
+      <single>
+        <search base="cowork_base">
+          <query>| where match(_raw, "\[VM\] Module loaded successfully") | stats count</query>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>Bundle status: rootfs missing</title>
+      <single>
+        <search base="cowork_base">
+          <query>| where match(_raw, "rootfs\.vhdx missing") | stats count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x53a051","0xf8be34"]</option>
+        <option name="rangeValues">[0]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Errors</title>
+      <single>
+        <search base="cowork_base">
+          <query>| where level="error" | stats count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x53a051","0xdc4e41"]</option>
+        <option name="rangeValues">[0]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Warnings</title>
+      <single>
+        <search base="cowork_base">
+          <query>| where level="warn" | stats count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x53a051","0xf8be34"]</option>
+        <option name="rangeValues">[0]</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>VM activity over time</title>
+      <chart>
+        <search base="cowork_base">
+          <query>| eval event=case(
+    match(_raw, "\[VM\] Module loaded successfully"), "vm_start",
+    match(_raw, "rootfs\.vhdx missing"), "rootfs_missing",
+    level="error", "error",
+    level="warn", "warn",
+    true(), "other")
+| timechart span=1d count by event</query>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>Events by component</title>
+      <chart>
+        <search base="cowork_base">
+          <query>| eval component=coalesce(component, "(none)")
+| stats count by component | sort - count</query>
+        </search>
+        <option name="charting.chart">bar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Recent VM log events</title>
+      <table>
+        <search base="cowork_base">
+          <query>| eval detail=substr(replace(_raw, "^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ", ""), 1, 220)
+| table _time level component log_file detail
+| sort - _time | head 100</query>
+        </search>
+        <option name="count">100</option>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+</form>

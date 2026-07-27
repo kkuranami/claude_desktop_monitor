@@ -1,0 +1,182 @@
+<form theme="dark" version="1.1">
+  <label>Desktop</label>
+  <description>This dashboard helps you analyze the volume and trends of error and warning logs coming from Claude Desktop.</description>
+
+  <fieldset submitButton="false" autoRun="true">
+    <input type="time" token="time_tok">
+      <label>Time range</label>
+      <default>
+        <earliest>-7d@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="dropdown" token="level_tok" searchWhenChanged="true">
+      <label>Log level</label>
+      <choice value="*">error + warn</choice>
+      <choice value="error">error only</choice>
+      <choice value="warn">warn only</choice>
+      <default>*</default>
+    </input>
+    <input type="dropdown" token="host_tok" searchWhenChanged="true">
+      <label>Host</label>
+      <choice value="*">All hosts</choice>
+      <fieldForLabel>host</fieldForLabel>
+      <fieldForValue>host</fieldForValue>
+      <search>
+        <query>| metadata type=hosts index=claude | sort host | fields host</query>
+        <earliest>-30d@d</earliest>
+        <latest>now</latest>
+      </search>
+      <default>*</default>
+    </input>
+  </fieldset>
+
+  <search id="desktop_base">
+    <query>`claude_index` host=$host_tok$ `claude_sourcetype_main`
+| eval level=lower(log_level)
+| where (level="error" OR level="warn") AND ("$level_tok$"="*" OR level="$level_tok$")
+| eval signal=case(
+    match(_raw, "Failed to fetch blocklist") OR match(_raw, "No blocklist data received"), "blocklist_fetch_failed",
+    match(_raw, "Failed to check allowlist status") OR match(_raw, "Could not determine allowlist status"), "allowlist_check_failed",
+    match(_raw, "Auto-update error") OR match(_raw, "\[updater\].*(error|failed)"), "auto_update_error",
+    match(_raw, "Sync failed") OR match(_raw, "\[RemotePluginManager\]"), "plugin_sync_failed",
+    match(_raw, "\[SkillsPlugin\].*conflicts"), "skill_conflict",
+    match(_raw, "UtilityProcess Check.*not found"), "mcp_extension_not_found",
+    match(_raw, "\[(plan-usage|my-access)\] fetch failed"), "usage_fetch_failed",
+    match(_raw, "\[EventLogging\] POST threw"), "event_logging_failed",
+    match(_raw, "network error") OR match(_raw, "net::ERR_"), "network_error",
+    match(_raw, "oauth failed") OR match(_raw, "session_stale_relogin"), "oauth_error",
+    match(_raw, "event-loop-stall"), "event_loop_stall",
+    match(_raw, "Blocked permission check"), "blocked_permission_check",
+    match(_raw, "Content Security Policy"), "csp_violation",
+    match(_raw, "BuddyBleTransport"), "buddy_ble_error",
+    match(_raw, "\[watch-record\]"), "watch_record_error",
+    match(_raw, "Sentry caught"), "sentry_captured",
+    true(), "other")</query>
+    <earliest>$time_tok.earliest$</earliest>
+    <latest>$time_tok.latest$</latest>
+  </search>
+
+  <row>
+    <panel>
+      <title>Errors</title>
+      <single>
+        <search base="desktop_base">
+          <query>| where level="error" | stats count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
+        <option name="rangeValues">[0,10]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Warnings</title>
+      <single>
+        <search base="desktop_base">
+          <query>| where level="warn" | stats count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x53a051","0xf8be34"]</option>
+        <option name="rangeValues">[0]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Blocklist / allowlist fetch failures</title>
+      <single>
+        <search base="desktop_base">
+          <query>| where signal="blocklist_fetch_failed" OR signal="allowlist_check_failed" | stats count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x53a051","0xdc4e41"]</option>
+        <option name="rangeValues">[0]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Plugin sync failures</title>
+      <single>
+        <search base="desktop_base">
+          <query>| where signal="plugin_sync_failed" | stats count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x53a051","0xdc4e41"]</option>
+        <option name="rangeValues">[0]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>MCP extension not found</title>
+      <single>
+        <search base="desktop_base">
+          <query>| where signal="mcp_extension_not_found" | stats count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
+        <option name="rangeValues">[0,5]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Event-loop stalls</title>
+      <single>
+        <search base="desktop_base">
+          <query>| where signal="event_loop_stall" | stats count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x53a051","0xf8be34"]</option>
+        <option name="rangeValues">[0]</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Signal trend</title>
+      <chart>
+        <search base="desktop_base">
+          <query>| timechart span=1h count by signal</query>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>Signals by type</title>
+      <chart>
+        <search base="desktop_base">
+          <query>| stats count by signal | sort - count</query>
+        </search>
+        <option name="charting.chart">bar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Event-loop stall durations (worst 20)</title>
+      <table>
+        <search base="desktop_base">
+          <query>| where signal="event_loop_stall"
+| rex field=_raw "blocked for (?&lt;stall_ms&gt;\d+)ms"
+| rex field=_raw "\[likely (?&lt;cause&gt;[^\]]+)\]"
+| eval stall_sec=round(tonumber(stall_ms)/1000, 1)
+| table _time stall_sec cause
+| sort - stall_sec | head 20</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+    <panel>
+      <title>Recent errors and warnings</title>
+      <table>
+        <search base="desktop_base">
+          <query>| eval detail=substr(replace(_raw, "^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ", ""), 1, 200)
+| table _time level component signal detail
+| sort - _time | head 50</query>
+        </search>
+        <option name="count">50</option>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+</form>

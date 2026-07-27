@@ -1,0 +1,7 @@
+<nav search_view="search" color="#6B4FBB">
+  <view name="overview" default="true" />
+  <view name="desktop" />
+  <view name="mcp" />
+  <view name="web" />
+  <view name="cowork" />
+</nav>
