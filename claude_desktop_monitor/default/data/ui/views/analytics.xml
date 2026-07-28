@@ -1,0 +1,165 @@
+<form theme="dark" version="1.1">
+  <label>Analytics</label>
+  <description>Track how much Claude Desktop is used across your machines, and how heavy it runs.</description>
+
+  <fieldset submitButton="false" autoRun="true">
+    <input type="time" token="time_tok">
+      <label>Time range</label>
+      <default>
+        <earliest>-7d@d</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="dropdown" token="host_tok" searchWhenChanged="true">
+      <label>Host</label>
+      <choice value="*">All hosts</choice>
+      <fieldForLabel>host</fieldForLabel>
+      <fieldForValue>host</fieldForValue>
+      <search>
+        <query>| metadata type=hosts index=claude | sort host | fields host</query>
+        <earliest>-30d@d</earliest>
+        <latest>now</latest>
+      </search>
+      <default>*</default>
+    </input>
+  </fieldset>
+
+  <!-- Base: all Claude log events (any level), used for activity/fleet stats. -->
+  <search id="an_base">
+    <query>`claude_index` host=$host_tok$ (`claude_sourcetype_main` OR `claude_sourcetype_mcp` OR `claude_sourcetype_web` OR `claude_sourcetype_cowork`)</query>
+    <earliest>$time_tok.earliest$</earliest>
+    <latest>$time_tok.latest$</latest>
+  </search>
+
+  <!-- ===================== ROW 1: KPI ===================== -->
+  <row>
+    <panel>
+      <title>Active hosts</title>
+      <single>
+        <search base="an_base">
+          <query>| stats dc(host)</query>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+    <panel>
+      <title>App launches</title>
+      <single>
+        <search>
+          <query>`claude_index` host=$host_tok$ `claude_sourcetype_main` "[CCD] Initialized with version"
+| stats count</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Active days</title>
+      <single>
+        <search base="an_base">
+          <query>| bucket _time span=1d | stats dc(_time) as days</query>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+    <panel>
+      <title>MCP connections</title>
+      <single>
+        <search>
+          <query>`claude_index` host=$host_tok$ `claude_sourcetype_mcp` "method=\"initialize\""
+| dedup _time host
+| stats count</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Avg memory (Resident Set Size)</title>
+      <single>
+        <search>
+          <query>`claude_index` host=$host_tok$ `claude_sourcetype_main` "[process-memory]"
+| rex field=_raw "tree_rss_sum=(?&lt;rss&gt;\d+)MB"
+| stats avg(rss) as avg_rss
+| eval avg_rss=round(avg_rss)</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="unit">MB</option>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+  </row>
+
+  <!-- ===================== ROW 2: TRENDS / SHARES ===================== -->
+  <row>
+    <panel>
+      <title>Event volume over time by host</title>
+      <chart>
+        <search base="an_base">
+          <query>| timechart span=1d count by host</query>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>Memory usage over time (Resident Set Size by host)</title>
+      <chart>
+        <search>
+          <query>`claude_index` host=$host_tok$ `claude_sourcetype_main` "[process-memory]"
+| rex field=_raw "tree_rss_sum=(?&lt;rss&gt;\d+)MB"
+| timechart span=1h avg(rss) as rss_mb by host</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleY.text">MB</option>
+      </chart>
+    </panel>
+  </row>
+
+  <!-- ===================== ROW 3: DETAIL TABLES ===================== -->
+  <row>
+    <panel>
+      <title>Top components by event volume</title>
+      <table>
+        <search>
+          <query>`claude_index` host=$host_tok$ (`claude_sourcetype_main` OR `claude_sourcetype_mcp` OR `claude_sourcetype_web` OR `claude_sourcetype_cowork`)
+| eval component=coalesce(component, mcp_server, "(none)")
+| stats count as events dc(host) as hosts by component
+| sort - events | head 25</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+    <panel>
+      <title>Per-host summary</title>
+      <table>
+        <search>
+          <query>`claude_index` host=$host_tok$ (`claude_sourcetype_main` OR `claude_sourcetype_mcp` OR `claude_sourcetype_web` OR `claude_sourcetype_cowork`)
+| eval level=lower(coalesce(log_level, log_level_b))
+| eval is_launch=if(match(_raw,"\[CCD\] Initialized with version"),1,0)
+| rex field=_raw "appVersion:\s*.(?&lt;ver&gt;[0-9.]+)."
+| eval is_err=if(level="error",1,0)
+| stats count as events sum(is_launch) as launches sum(is_err) as errors latest(ver) as version max(_time) as last_seen by host
+| eval last_seen=strftime(last_seen, "%Y-%m-%d %H:%M")
+| eval error_rate=round(errors*100.0/events,2)."%"
+| table host version launches events errors error_rate last_seen
+| sort - events</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+</form>

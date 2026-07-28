@@ -1,0 +1,209 @@
+<form theme="dark" version="1.1">
+  <label>Troubleshooting</label>
+  <description>Break down Claude Desktop logs by level and host to spot trends, with a full event listing.</description>
+
+  <fieldset submitButton="false" autoRun="true">
+    <input type="time" token="time_tok">
+      <label>Time range</label>
+      <default>
+        <earliest>-24h@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="dropdown" token="host_tok" searchWhenChanged="true">
+      <label>Host</label>
+      <choice value="*">All hosts</choice>
+      <fieldForLabel>host</fieldForLabel>
+      <fieldForValue>host</fieldForValue>
+      <search>
+        <query>| metadata type=hosts index=claude | sort host | fields host</query>
+        <earliest>-30d@d</earliest>
+        <latest>now</latest>
+      </search>
+      <default>*</default>
+    </input>
+    <input type="multiselect" token="level_tok" searchWhenChanged="true">
+      <label>Log levels</label>
+      <fieldForLabel>level</fieldForLabel>
+      <fieldForValue>level</fieldForValue>
+      <search>
+        <query>`claude_index` (`claude_sourcetype_main` OR `claude_sourcetype_mcp` OR `claude_sourcetype_web` OR `claude_sourcetype_cowork`)
+| eval level=lower(coalesce(log_level, log_level_b))
+| where isnotnull(level)
+| stats count by level | sort - count | fields level</query>
+        <earliest>-30d@d</earliest>
+        <latest>now</latest>
+      </search>
+      <valuePrefix>"</valuePrefix>
+      <valueSuffix>"</valueSuffix>
+      <delimiter>, </delimiter>
+      <default>error,warn</default>
+      <initialValue>error,warn</initialValue>
+    </input>
+  </fieldset>
+
+  <!-- Base: every error/warn across main, mcp, cowork, web, with level and symptom category resolved. -->
+  <search id="ts_base">
+    <query>`claude_index` host=$host_tok$ (`claude_sourcetype_main` OR `claude_sourcetype_mcp` OR `claude_sourcetype_web` OR `claude_sourcetype_cowork`)
+| eval level=lower(coalesce(log_level, log_level_b))
+| where level IN ($level_tok$)
+| eval area=case(match(sourcetype,"mcp"),"mcp", match(sourcetype,"cowork"),"cowork", match(sourcetype,"web"),"web", true(),"desktop")
+| eval category=case(
+    match(_raw, "net::ERR_") OR match(_raw, "networking is broken") OR match(_raw, "ERR_NAME_NOT_RESOLVED") OR match(_raw, "EventLogging\] POST threw") OR match(_raw, "Failed to fetch") OR match(_raw, "fetch failed"), "network",
+    match(_raw, "oauth") OR match(_raw, "OAuth") OR match(_raw, "session_stale_relogin") OR match(_raw, "Blocked permission check") OR match(_raw, "allowlist") OR match(_raw, "token cache"), "auth",
+    match(_raw, "\[updater\]") OR match(_raw, "Auto-update"), "update",
+    match(_raw, "RemotePluginManager") OR match(_raw, "SkillsPlugin") OR match(_raw, "PluginsFetcher") OR match(_raw, "Sync failed"), "plugin",
+    match(_raw, "not found in installed extensions") OR match(_raw, "Server disconnected") OR match(_raw, "LocalMcpServerManager") OR match(sourcetype,"mcp"), "mcp",
+    match(_raw, "SessionManager\] Cannot initialize") OR match(_raw, "persisted sessions"), "session",
+    match(_raw, "Network Service process gone") OR match(_raw, "Uncaught") OR match(_raw, "Sentry caught") OR match(_raw, "watch-record") OR match(_raw, "BuddyBleTransport") OR match(_raw, "REACT_QUERY_CLIENT"), "crash",
+    match(_raw, "MaxListenersExceededWarning"), "resource_leak",
+    match(_raw, "Content Security Policy") OR match(_raw, "ProseMirror") OR match(_raw, "Deprecated API"), "ui_warning",
+    match(_raw, "event-loop-stall"), "stall",
+    true(), "other")
+| eval is_critical=if(level="error" AND (category="network" OR category="crash" OR category="auth"), 1, 0)</query>
+    <earliest>$time_tok.earliest$</earliest>
+    <latest>$time_tok.latest$</latest>
+  </search>
+
+  <!-- ===================== ROW 1: KPI ===================== -->
+  <row>
+    <panel>
+      <title>Critical errors</title>
+      <single>
+        <search base="ts_base">
+          <query>| where is_critical=1 | stats count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
+        <option name="rangeValues">[0,1]</option>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Errors</title>
+      <single>
+        <search base="ts_base">
+          <query>| where level="error" | stats count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
+        <option name="rangeValues">[0,10]</option>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Warnings</title>
+      <single>
+        <search base="ts_base">
+          <query>| where level="warn" | stats count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x53a051","0xf8be34"]</option>
+        <option name="rangeValues">[0]</option>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Affected hosts</title>
+      <single>
+        <search base="ts_base">
+          <query>| stats dc(host)</query>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+    <panel>
+      <title>MCP disconnects</title>
+      <single>
+        <search base="ts_base">
+          <query>| where match(_raw, "Server disconnected") | stats count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
+        <option name="rangeValues">[0,3]</option>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Process / crash events</title>
+      <single>
+        <search base="ts_base">
+          <query>| where category="crash" | stats count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x53a051","0xdc4e41"]</option>
+        <option name="rangeValues">[0]</option>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+  </row>
+
+  <!-- ===================== ROW 2: TRENDS / SHARES ===================== -->
+  <row>
+    <panel>
+      <title>Events over time by level</title>
+      <chart>
+        <search base="ts_base">
+          <query>| timechart span=1h count by level</query>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>Symptom categories</title>
+      <chart>
+        <search base="ts_base">
+          <query>| stats count by category | sort - count</query>
+        </search>
+        <option name="charting.chart">pie</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>Events by host and level</title>
+      <chart>
+        <search base="ts_base">
+          <query>| chart count over host by level</query>
+        </search>
+        <option name="charting.chart">bar</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+  </row>
+
+  <!-- ===================== ROW 3: DETAIL TABLES ===================== -->
+  <row>
+    <panel>
+      <title>Top messages (matching selected log levels)</title>
+      <table>
+        <search base="ts_base">
+          <query>| eval msg=substr(replace(_raw, "^\S+[ T]\S+\s*(\[\w+\]\s*)?", ""), 1, 160)
+| stats count as events dc(host) as hosts max(_time) as last_seen by category msg
+| eval last_seen=strftime(last_seen, "%m-%d %H:%M")
+| sort - events | head 30</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Recent events</title>
+      <table>
+        <search base="ts_base">
+          <query>| eval component=coalesce(component, mcp_server, "(none)")
+| eval detail=substr(replace(_raw, "^\S+[ T]\S+\s*", ""), 1, 300)
+| table _time host area level category component detail
+| sort - _time | head 100</query>
+        </search>
+        <option name="count">25</option>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+</form>
