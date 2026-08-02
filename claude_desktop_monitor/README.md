@@ -23,6 +23,7 @@ This App provides inputs and source type definitions for ingesting the following
 - Dashboards
   - analytics
   - troubleshooting
+  - MCP Server
 
 ## Installation
 This App combines visualization functionality and data ingestion functionality.

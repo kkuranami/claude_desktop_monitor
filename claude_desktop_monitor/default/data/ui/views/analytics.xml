@@ -26,7 +26,7 @@
 
   <!-- Base: all Claude log events (any level), used for activity/fleet stats. -->
   <search id="an_base">
-    <query>`claude_index` host=$host_tok$ (`claude_sourcetype_main` OR `claude_sourcetype_mcp` OR `claude_sourcetype_web` OR `claude_sourcetype_cowork`)</query>
+    <query>`claude_index` host=$host_tok$ (sourcetype=claude:desktop:main OR sourcetype=claude:desktop:mcp OR sourcetype=claude:desktop:web OR sourcetype=claude:desktop:cowork OR sourcetype=claude:desktop:cowork:service)</query>
     <earliest>$time_tok.earliest$</earliest>
     <latest>$time_tok.latest$</latest>
   </search>
@@ -46,7 +46,7 @@
       <title>App launches</title>
       <single>
         <search>
-          <query>`claude_index` host=$host_tok$ `claude_sourcetype_main` "[CCD] Initialized with version"
+          <query>`claude_index` host=$host_tok$ sourcetype=claude:desktop:main "[CCD] Initialized with version"
 | stats count</query>
           <earliest>$time_tok.earliest$</earliest>
           <latest>$time_tok.latest$</latest>
@@ -67,7 +67,7 @@
       <title>MCP connections</title>
       <single>
         <search>
-          <query>`claude_index` host=$host_tok$ `claude_sourcetype_mcp` "method=\"initialize\""
+          <query>`claude_index` host=$host_tok$ sourcetype=claude:desktop:mcp "method=\"initialize\""
 | dedup _time host
 | stats count</query>
           <earliest>$time_tok.earliest$</earliest>
@@ -80,7 +80,7 @@
       <title>Avg memory (Resident Set Size)</title>
       <single>
         <search>
-          <query>`claude_index` host=$host_tok$ `claude_sourcetype_main` "[process-memory]"
+          <query>`claude_index` host=$host_tok$ sourcetype=claude:desktop:main "[process-memory]"
 | rex field=_raw "tree_rss_sum=(?&lt;rss&gt;\d+)MB"
 | stats avg(rss) as avg_rss
 | eval avg_rss=round(avg_rss)</query>
@@ -110,7 +110,7 @@
       <title>Memory usage over time (Resident Set Size by host)</title>
       <chart>
         <search>
-          <query>`claude_index` host=$host_tok$ `claude_sourcetype_main` "[process-memory]"
+          <query>`claude_index` host=$host_tok$ sourcetype=claude:desktop:main "[process-memory]"
 | rex field=_raw "tree_rss_sum=(?&lt;rss&gt;\d+)MB"
 | timechart span=1h avg(rss) as rss_mb by host</query>
           <earliest>$time_tok.earliest$</earliest>
@@ -129,7 +129,7 @@
       <title>Top components by event volume</title>
       <table>
         <search>
-          <query>`claude_index` host=$host_tok$ (`claude_sourcetype_main` OR `claude_sourcetype_mcp` OR `claude_sourcetype_web` OR `claude_sourcetype_cowork`)
+          <query>`claude_index` host=$host_tok$ (sourcetype=claude:desktop:main OR sourcetype=claude:desktop:mcp OR sourcetype=claude:desktop:web OR sourcetype=claude:desktop:cowork OR sourcetype=claude:desktop:cowork:service)
 | eval component=coalesce(component, mcp_server, "(none)")
 | stats count as events dc(host) as hosts by component
 | sort - events | head 25</query>
@@ -144,7 +144,7 @@
       <title>Per-host summary</title>
       <table>
         <search>
-          <query>`claude_index` host=$host_tok$ (`claude_sourcetype_main` OR `claude_sourcetype_mcp` OR `claude_sourcetype_web` OR `claude_sourcetype_cowork`)
+          <query>`claude_index` host=$host_tok$ (sourcetype=claude:desktop:main OR sourcetype=claude:desktop:mcp OR sourcetype=claude:desktop:web OR sourcetype=claude:desktop:cowork OR sourcetype=claude:desktop:cowork:service)
 | eval level=lower(coalesce(log_level, log_level_b))
 | eval is_launch=if(match(_raw,"\[CCD\] Initialized with version"),1,0)
 | rex field=_raw "appVersion:\s*.(?&lt;ver&gt;[0-9.]+)."

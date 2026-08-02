@@ -27,7 +27,7 @@
       <fieldForLabel>level</fieldForLabel>
       <fieldForValue>level</fieldForValue>
       <search>
-        <query>`claude_index` (`claude_sourcetype_main` OR `claude_sourcetype_mcp` OR `claude_sourcetype_web` OR `claude_sourcetype_cowork`)
+        <query>`claude_index` (sourcetype=claude:desktop:main OR sourcetype=claude:desktop:mcp OR sourcetype=claude:desktop:web OR sourcetype=claude:desktop:cowork)
 | eval level=lower(coalesce(log_level, log_level_b))
 | where isnotnull(level)
 | stats count by level | sort - count | fields level</query>
@@ -44,7 +44,7 @@
 
   <!-- Base: every error/warn across main, mcp, cowork, web, with level and symptom category resolved. -->
   <search id="ts_base">
-    <query>`claude_index` host=$host_tok$ (`claude_sourcetype_main` OR `claude_sourcetype_mcp` OR `claude_sourcetype_web` OR `claude_sourcetype_cowork`)
+    <query>`claude_index` host=$host_tok$ (sourcetype=claude:desktop:main OR sourcetype=claude:desktop:mcp OR sourcetype=claude:desktop:web OR sourcetype=claude:desktop:cowork)
 | eval level=lower(coalesce(log_level, log_level_b))
 | where level IN ($level_tok$)
 | eval area=case(match(sourcetype,"mcp"),"mcp", match(sourcetype,"cowork"),"cowork", match(sourcetype,"web"),"web", true(),"desktop")

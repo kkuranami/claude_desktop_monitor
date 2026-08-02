@@ -1,0 +1,182 @@
+<form theme="dark" version="1.1">
+  <label>MCP Server</label>
+  <description>See which MCP servers ran and where they connected, track tool-call volume over time, and catch connection, auth and TLS problems.</description>
+
+  <fieldset submitButton="false" autoRun="true">
+    <input type="time" token="time_tok">
+      <label>Time range</label>
+      <default>
+        <earliest>-7d@d</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="dropdown" token="host_tok" searchWhenChanged="true">
+      <label>Host</label>
+      <choice value="*">All hosts</choice>
+      <fieldForLabel>host</fieldForLabel>
+      <fieldForValue>host</fieldForValue>
+      <search>
+        <query>| metadata type=hosts index=claude | sort host | fields host</query>
+        <earliest>-30d@d</earliest>
+        <latest>now</latest>
+      </search>
+      <default>*</default>
+    </input>
+  </fieldset>
+
+  <!--
+    Base: every MCP event, with the server name normalized and each event classified into a kind.
+    Server name is taken from the per-server log filename (mcp-server-<name>.log) first, then from
+    the [<name>] bracket in the message, so proxy-file (mcp.log) rows resolve to the same server.
+    MCP logs are double-written (mcp.log + mcp-server-<name>.log, ~same timestamp), so protocol
+    events are de-duplicated on (floor(_time), host, kind, server). Rows with a real classified
+    kind are kept; the noisy "other" rows are dropped.
+  -->
+  <search id="mcp_base">
+    <query>`claude_index` host=$host_tok$ sourcetype=claude:desktop:mcp
+| rex field=source "mcp-server-(?&lt;sv_file&gt;[a-zA-Z0-9_.-]+)\.log$"
+| rex field=_raw "\[(?:info|error|warn)\]\s+\[(?&lt;sv_msg&gt;[a-zA-Z][a-zA-Z0-9_.-]+)\]"
+| rex field=_raw "^\S+\s+\[(?&lt;sv_msg2&gt;[a-zA-Z][a-zA-Z0-9_.-]+)\]\s+\[(?:info|error|warn)\]"
+| eval server=coalesce(sv_file, sv_msg, sv_msg2, "unknown")
+| eval kind=case(
+    match(_raw, "method=\"tools/call\""), "tools_call",
+    match(_raw, "method=\"initialize\""), "initialize",
+    match(_raw, "Connecting to remote server"), "connect",
+    match(_raw, "NODE_TLS_REJECT_UNAUTHORIZED"), "tls_insecure",
+    match(_raw, "Server disconnected") OR match(_raw, "transport closed unexpectedly"), "disconnect",
+    match(_raw, "ENOENT") OR match(_raw, "spawn "), "spawn_fail",
+    match(_raw, "[Oo]auth") OR match(_raw, "401") OR match(_raw, "403") OR match(_raw, "[Uu]nauthorized") OR match(_raw, "[Ff]orbidden") OR match(_raw, "invalid_token") OR match(_raw, "access denied"), "auth_error",
+    true(), "other")
+| where kind!="other"
+| eval sec=floor(_time)
+| dedup sec host kind server</query>
+    <earliest>$time_tok.earliest$</earliest>
+    <latest>$time_tok.latest$</latest>
+  </search>
+
+  <!-- ===================== ROW 1: KPI ===================== -->
+  <row>
+    <panel>
+      <title>MCP servers active</title>
+      <single>
+        <search base="mcp_base">
+          <query>| stats dc(server)</query>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Remote endpoints</title>
+      <single>
+        <search base="mcp_base">
+          <query>| where kind="connect" | rex field=_raw "Connecting to remote server:\s*(?&lt;endpoint&gt;\S+)" | stats dc(endpoint)</query>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Tool calls</title>
+      <single>
+        <search base="mcp_base">
+          <query>| where kind="tools_call" | stats count</query>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+  </row>
+
+  <!-- ===================== ROW 2: TIMELINE ===================== -->
+  <row>
+    <panel>
+      <title>Endpoints over time by server</title>
+      <chart>
+        <search base="mcp_base">
+          <query>| where kind="connect" | timechart span=1h count by server</query>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.drilldown">none</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>Tool calls over time by server</title>
+      <chart>
+        <search base="mcp_base">
+          <query>| where kind="tools_call" | timechart span=1h count by server</query>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.drilldown">none</option>
+      </chart>
+    </panel>
+  </row>
+
+  <!-- ===================== ROW 3: SERVER + ENDPOINT INVENTORY ===================== -->
+  <row>
+    <panel>
+      <title>MCP servers: activity, endpoints and timing</title>
+      <table>
+        <search base="mcp_base">
+          <query>| rex field=_raw "Connecting to remote server:\s*(?&lt;endpoint&gt;\S+)"
+| rex field=endpoint "https?://(?&lt;dest&gt;[^/:]+)"
+| stats count as events
+        sum(eval(if(kind="tools_call",1,0))) as tool_calls
+        sum(eval(if(kind="initialize",1,0))) as inits
+        sum(eval(if(kind="connect",1,0))) as remote_connects
+        sum(eval(if(kind="disconnect",1,0))) as disconnects
+        sum(eval(if(kind="tls_insecure",1,0))) as tls_disabled
+        values(dest) as dest_hosts
+        values(endpoint) as endpoints
+        dc(host) as hosts
+        min(_time) as first_seen max(_time) as last_seen
+    by server
+| eval first_seen=strftime(first_seen, "%m-%d %H:%M"), last_seen=strftime(last_seen, "%m-%d %H:%M")
+| table server hosts inits remote_connects tool_calls disconnects tls_disabled dest_hosts endpoints first_seen last_seen
+| sort - tool_calls</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <!-- ===================== ROW 4: ENDPOINT INVENTORY + PROBLEMS ===================== -->
+  <row>
+    <panel>
+      <title>Remote endpoints contacted</title>
+      <table>
+        <search base="mcp_base">
+          <query>| where kind="connect"
+| rex field=_raw "Connecting to remote server:\s*(?&lt;endpoint&gt;\S+)"
+| rex field=endpoint "https?://(?&lt;dest&gt;[^/:]+)(?::(?&lt;port&gt;\d+))?"
+| stats count as connects values(server) as servers dc(host) as hosts min(_time) as first max(_time) as last by endpoint dest port
+| eval first=strftime(first, "%m-%d %H:%M"), last=strftime(last, "%m-%d %H:%M")
+| table endpoint dest port servers hosts connects first last
+| sort - connects</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <!-- ===================== ROW 5: PROBLEMS ===================== -->
+  <row>
+    <panel>
+      <title>Connection / auth / TLS problems</title>
+      <table>
+        <search base="mcp_base">
+          <query>| where kind IN ("disconnect","spawn_fail","auth_error","tls_insecure")
+| eval detail=substr(replace(_raw, "^\S+[ T]\S+\s*(\[\w+\]\s*)?", ""), 1, 200)
+| table _time host server kind detail
+| sort - _time | head 100</query>
+        </search>
+        <option name="count">20</option>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+</form>
