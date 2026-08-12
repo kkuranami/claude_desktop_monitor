@@ -96,6 +96,10 @@ A2. Yes. However, when using Claude Desktop on 3P, the output paths for logs and
 Please also refer to the following:
 https://claude.com/docs/third-party/claude-desktop/data-storage
 
+Q3. Are the bearer tokens contained in the logs forwarded to Splunk as-is?
+A3. No. Bearer tokens contained in mcp*.log are masked to the string "***REDACTED***" via SEDCMD before being forwarded. However, since this may not be complete in cases such as when the log output format changes, we apologize for the inconvenience but ask that you also verify on your own that they are properly masked, just to be safe.
+
+
 ## Categories
 * Artificial Intelligence
 * Utilities

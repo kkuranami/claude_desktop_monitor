@@ -43,7 +43,7 @@
     match(_raw, "method=\"initialize\""), "initialize",
     match(_raw, "Connecting to remote server"), "connect",
     match(_raw, "NODE_TLS_REJECT_UNAUTHORIZED"), "tls_insecure",
-    match(_raw, "Server disconnected") OR match(_raw, "transport closed unexpectedly"), "disconnect",
+    match(_raw, "Server disconnected") OR match(_raw, "transport closed"), "disconnect",
     match(_raw, "ENOENT") OR match(_raw, "spawn "), "spawn_fail",
     match(_raw, "[Oo]auth") OR match(_raw, "401") OR match(_raw, "403") OR match(_raw, "[Uu]nauthorized") OR match(_raw, "[Ff]orbidden") OR match(_raw, "invalid_token") OR match(_raw, "access denied"), "auth_error",
     true(), "other")
@@ -169,13 +169,21 @@
       <table>
         <search base="mcp_base">
           <query>| where kind IN ("disconnect","spawn_fail","auth_error","tls_insecure")
-| eval detail=substr(replace(_raw, "^\S+[ T]\S+\s*(\[\w+\]\s*)?", ""), 1, 200)
-| table _time host server kind detail
+| eval detail=replace(replace(replace(_raw, "\s+", " "), "^\S+ \S+ ", ""), "^(\[[^\]]+\]\s*)+", "")
+| eval detail=substr(detail, 1, 200)
+| eval _epoch=_time
+| table _time host server kind detail _epoch
 | sort - _time | head 100</query>
         </search>
         <option name="count">20</option>
-        <option name="drilldown">none</option>
+        <option name="drilldown">row</option>
         <option name="wrap">true</option>
+        <!-- Click a row to open that host's MCP events in a +/-5min window around the row's time. -->
+        <drilldown>
+          <eval token="d_earliest">floor($row._epoch$)-300</eval>
+          <eval token="d_latest">floor($row._epoch$)+300</eval>
+          <link target="_blank"><![CDATA[/app/search/search?q=search `claude_index` sourcetype%3Dclaude:desktop:mcp host%3D$row.host|s$&earliest=$d_earliest$&latest=$d_latest$]]></link>
+        </drilldown>
       </table>
     </panel>
   </row>

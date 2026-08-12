@@ -42,43 +42,21 @@
     </input>
   </fieldset>
 
-  <!-- Base: every error/warn across main, mcp, cowork, web, with level and symptom category resolved. -->
+  <!-- Base: every error/warn across main, mcp, cowork, web. Grouping uses fields the logs
+       actually provide: `area` from sourcetype, and `component` as-logged. Events whose log
+       line carries no [component] are left as "(none)" rather than guessed at from _raw. -->
   <search id="ts_base">
     <query>`claude_index` host=$host_tok$ (sourcetype=claude:desktop:main OR sourcetype=claude:desktop:mcp OR sourcetype=claude:desktop:web OR sourcetype=claude:desktop:cowork)
 | eval level=lower(coalesce(log_level, log_level_b))
 | where level IN ($level_tok$)
 | eval area=case(match(sourcetype,"mcp"),"mcp", match(sourcetype,"cowork"),"cowork", match(sourcetype,"web"),"web", true(),"desktop")
-| eval category=case(
-    match(_raw, "net::ERR_") OR match(_raw, "networking is broken") OR match(_raw, "ERR_NAME_NOT_RESOLVED") OR match(_raw, "EventLogging\] POST threw") OR match(_raw, "Failed to fetch") OR match(_raw, "fetch failed"), "network",
-    match(_raw, "oauth") OR match(_raw, "OAuth") OR match(_raw, "session_stale_relogin") OR match(_raw, "Blocked permission check") OR match(_raw, "allowlist") OR match(_raw, "token cache"), "auth",
-    match(_raw, "\[updater\]") OR match(_raw, "Auto-update"), "update",
-    match(_raw, "RemotePluginManager") OR match(_raw, "SkillsPlugin") OR match(_raw, "PluginsFetcher") OR match(_raw, "Sync failed"), "plugin",
-    match(_raw, "not found in installed extensions") OR match(_raw, "Server disconnected") OR match(_raw, "LocalMcpServerManager") OR match(sourcetype,"mcp"), "mcp",
-    match(_raw, "SessionManager\] Cannot initialize") OR match(_raw, "persisted sessions"), "session",
-    match(_raw, "Network Service process gone") OR match(_raw, "Uncaught") OR match(_raw, "Sentry caught") OR match(_raw, "watch-record") OR match(_raw, "BuddyBleTransport") OR match(_raw, "REACT_QUERY_CLIENT"), "crash",
-    match(_raw, "MaxListenersExceededWarning"), "resource_leak",
-    match(_raw, "Content Security Policy") OR match(_raw, "ProseMirror") OR match(_raw, "Deprecated API"), "ui_warning",
-    match(_raw, "event-loop-stall"), "stall",
-    true(), "other")
-| eval is_critical=if(level="error" AND (category="network" OR category="crash" OR category="auth"), 1, 0)</query>
+| eval component=coalesce(component, mcp_server, "(none)")</query>
     <earliest>$time_tok.earliest$</earliest>
     <latest>$time_tok.latest$</latest>
   </search>
 
   <!-- ===================== ROW 1: KPI ===================== -->
   <row>
-    <panel>
-      <title>Critical errors</title>
-      <single>
-        <search base="ts_base">
-          <query>| where is_critical=1 | stats count</query>
-        </search>
-        <option name="colorMode">block</option>
-        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
-        <option name="rangeValues">[0,1]</option>
-        <option name="drilldown">none</option>
-      </single>
-    </panel>
     <panel>
       <title>Errors</title>
       <single>
@@ -125,14 +103,11 @@
       </single>
     </panel>
     <panel>
-      <title>Process / crash events</title>
+      <title>Distinct components</title>
       <single>
         <search base="ts_base">
-          <query>| where category="crash" | stats count</query>
+          <query>| where component!="(none)" | stats dc(component)</query>
         </search>
-        <option name="colorMode">block</option>
-        <option name="rangeColors">["0x53a051","0xdc4e41"]</option>
-        <option name="rangeValues">[0]</option>
         <option name="drilldown">none</option>
       </single>
     </panel>
@@ -152,10 +127,10 @@
       </chart>
     </panel>
     <panel>
-      <title>Symptom categories</title>
+      <title>Events by component</title>
       <chart>
         <search base="ts_base">
-          <query>| stats count by category | sort - count</query>
+          <query>| stats count by component | sort - count | head 10</query>
         </search>
         <option name="charting.chart">pie</option>
       </chart>
@@ -176,33 +151,48 @@
   <!-- ===================== ROW 3: DETAIL TABLES ===================== -->
   <row>
     <panel>
-      <title>Top messages (matching selected log levels)</title>
+      <title>Top messages (matching selected log levels) — message truncated to 160 chars</title>
       <table>
         <search base="ts_base">
-          <query>| eval msg=substr(replace(_raw, "^\S+[ T]\S+\s*(\[\w+\]\s*)?", ""), 1, 160)
-| stats count as events dc(host) as hosts max(_time) as last_seen by category msg
-| eval last_seen=strftime(last_seen, "%m-%d %H:%M")
-| sort - events | head 30</query>
+          <query>| eval msg=replace(replace(replace(_raw, "\s+", " "), "^\S+ \S+ ", ""), "^(\[[^\]]+\]\s*)+", "")
+| eval msg=substr(msg, 1, 160)
+| stats count as events max(_time) as _epoch by host component msg
+| eval last_seen=strftime(_epoch, "%Y/%m/%d %H:%M:%S")
+| sort - events | head 30
+| table host component msg events last_seen _epoch</query>
         </search>
-        <option name="drilldown">none</option>
+        <option name="drilldown">row</option>
         <option name="wrap">true</option>
+        <!-- Click a row to open that host's events in a +/-5min window around the row's time. -->
+        <drilldown>
+          <eval token="d_earliest">floor($row._epoch$)-300</eval>
+          <eval token="d_latest">floor($row._epoch$)+300</eval>
+          <link target="_blank"><![CDATA[/app/search/search?q=search `claude_index` host%3D$row.host|s$&earliest=$d_earliest$&latest=$d_latest$]]></link>
+        </drilldown>
       </table>
     </panel>
   </row>
 
   <row>
     <panel>
-      <title>Recent events</title>
+      <title>Recent events — detail truncated to 300 chars</title>
       <table>
         <search base="ts_base">
-          <query>| eval component=coalesce(component, mcp_server, "(none)")
-| eval detail=substr(replace(_raw, "^\S+[ T]\S+\s*", ""), 1, 300)
-| table _time host area level category component detail
+          <query>| eval detail=replace(replace(replace(_raw, "\s+", " "), "^\S+ \S+ ", ""), "^(\[[^\]]+\]\s*)+", "")
+| eval detail=substr(detail, 1, 300)
+| eval _epoch=_time
+| table _time host area level component detail _epoch
 | sort - _time | head 100</query>
         </search>
         <option name="count">25</option>
-        <option name="drilldown">none</option>
+        <option name="drilldown">row</option>
         <option name="wrap">true</option>
+        <!-- Click a row to open that host's events in a +/-5min window around the row's time. -->
+        <drilldown>
+          <eval token="d_earliest">floor($row._epoch$)-300</eval>
+          <eval token="d_latest">floor($row._epoch$)+300</eval>
+          <link target="_blank"><![CDATA[/app/search/search?q=search `claude_index` host%3D$row.host|s$&earliest=$d_earliest$&latest=$d_latest$]]></link>
+        </drilldown>
       </table>
     </panel>
   </row>
